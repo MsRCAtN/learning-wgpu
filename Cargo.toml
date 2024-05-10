@@ -1,0 +1,27 @@
+[package]
+name = "wgpu-learning"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cfg-if = "1"
+winit = "0.29.15"
+env_logger = "0.11"
+log = "0.4"
+wgpu = "0.20"
+pollster = "0.3"
+app-surface = "0.4.2"
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+console_log = "1.0"
+wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.34"
+web-sys = { version = "0.3.64", features = [
+    "Document",
+    "Window",
+    "Element",
+]}
+
+[features]
+default = []
+webgl = ["wgpu/webgl"]
