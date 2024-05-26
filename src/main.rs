@@ -1,5 +1,8 @@
 use app_surface::{AppSurface, SurfaceFrame};
 use std::iter;
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 use winit::{
     dpi::PhysicalSize,
     event::*,
@@ -7,15 +10,13 @@ use winit::{
     keyboard::{Key, NamedKey},
     window::{WindowBuilder, WindowId},
 };
-use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
+use wgpu::util::DeviceExt;
 struct State {
     app: AppSurface,
     render_pipeline: wgpu::RenderPipeline,
     challenge_render_pipeline: wgpu::RenderPipeline,
     use_color: bool,
+    vertex_buffer: wgpu::Buffer,
 }
 
 pub trait Action {
@@ -40,6 +41,12 @@ impl Action for State {
                 label: Some("Shader"),
                 source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
             });
+        // new()
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
         let render_pipeline_layout =
             app.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -206,7 +213,8 @@ impl Action for State {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { // Background Color
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            // Background Color
                             r: 0.2,
                             g: 0.0,
                             b: 0.0,
@@ -402,7 +410,7 @@ impl Action for State {
 }
  */
 
- fn start_event_loop<A: Action + 'static>(event_loop: EventLoop<()>, instance: A) {
+fn start_event_loop<A: Action + 'static>(event_loop: EventLoop<()>, instance: A) {
     let mut state = instance;
     let mut last_render_time = Instant::now();
     cfg_if::cfg_if! {
@@ -461,8 +469,8 @@ impl Action for State {
             }
         },
     );
- }
- async fn create_action_instance<A: Action + 'static>(
+}
+async fn create_action_instance<A: Action + 'static>(
     wh_ratio: Option<f32>,
     #[cfg(target_arch = "wasm32")] html_canvas_container_id: Option<&'static str>,
 ) -> (EventLoop<()>, A) {
@@ -553,53 +561,94 @@ impl Action for State {
     (event_loop, instance)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run<A: Action + 'static>(
+    wh_ratio: Option<f32>,
+    _html_canvas_container_id: Option<&'static str>,
+) {
+    env_logger::init();
 
- #[cfg(not(target_arch = "wasm32"))]
- pub fn run<A: Action + 'static>(
-     wh_ratio: Option<f32>,
-     _html_canvas_container_id: Option<&'static str>,
- ) {
-     env_logger::init();
- 
-     let (event_loop, instance) = pollster::block_on(create_action_instance::<A>(wh_ratio));
-     start_event_loop::<A>(event_loop, instance);
- }
- 
- #[cfg(target_arch = "wasm32")]
- pub fn run<A: Action + 'static>(
-     wh_ratio: Option<f32>,
-     html_canvas_container_id: Option<&'static str>,
- ) {
-     use wasm_bindgen::prelude::*;
- 
-     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-     console_log::init_with_level(log::Level::Warn).expect("无法初始化日志库");
- 
-     wasm_bindgen_futures::spawn_local(async move {
-         let (event_loop, instance) =
-             create_action_instance::<A>(wh_ratio, html_canvas_container_id).await;
-         let run_closure =
-             Closure::once_into_js(move || start_event_loop::<A>(event_loop, instance));
- 
-         // 处理运行过程中抛出的 JS 异常。
-         // 否则 wasm_bindgen_futures 队列将中断，且不再处理任何任务。
-         if let Err(error) = call_catch(&run_closure) {
-             let is_control_flow_exception = error.dyn_ref::<js_sys::Error>().map_or(false, |e| {
-                 e.message().includes("Using exceptions for control flow", 0)
-             });
- 
-             if !is_control_flow_exception {
-                 web_sys::console::error_1(&error);
-             }
-         }
- 
-         #[wasm_bindgen]
-         extern "C" {
-             #[wasm_bindgen(catch, js_namespace = Function, js_name = "prototype.call.call")]
-             fn call_catch(this: &JsValue) -> Result<(), JsValue>;
-         }
-     });
- }
+    let (event_loop, instance) = pollster::block_on(create_action_instance::<A>(wh_ratio));
+    start_event_loop::<A>(event_loop, instance);
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run<A: Action + 'static>(
+    wh_ratio: Option<f32>,
+    html_canvas_container_id: Option<&'static str>,
+) {
+    use wasm_bindgen::prelude::*;
+
+    std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+    console_log::init_with_level(log::Level::Warn).expect("无法初始化日志库");
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let (event_loop, instance) =
+            create_action_instance::<A>(wh_ratio, html_canvas_container_id).await;
+        let run_closure =
+            Closure::once_into_js(move || start_event_loop::<A>(event_loop, instance));
+
+        // 处理运行过程中抛出的 JS 异常。
+        // 否则 wasm_bindgen_futures 队列将中断，且不再处理任何任务。
+        if let Err(error) = call_catch(&run_closure) {
+            let is_control_flow_exception = error.dyn_ref::<js_sys::Error>().map_or(false, |e| {
+                e.message().includes("Using exceptions for control flow", 0)
+            });
+
+            if !is_control_flow_exception {
+                web_sys::console::error_1(&error);
+            }
+        }
+
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(catch, js_namespace = Function, js_name = "prototype.call.call")]
+            fn call_catch(this: &JsValue) -> Result<(), JsValue>;
+        }
+    });
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.0, 0.0, 1.0],
+    },
+];
+
+impl Vertex {
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
 
 fn main() {
     run::<State>(None, None);
